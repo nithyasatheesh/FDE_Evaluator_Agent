@@ -3,7 +3,8 @@ import pandas as pd
 import zipfile
 import io
 import json
-import re
+import hashlib
+import os
 
 from pathlib import Path
 from concurrent.futures import ThreadPoolExecutor
@@ -32,24 +33,105 @@ client = OpenAI(
 
 
 # ==========================
-# FILE READERS
+# CACHE
+# ==========================
+
+CACHE_FILE="evaluation_cache.json"
+
+
+def load_cache():
+
+    try:
+
+        if os.path.exists(
+            CACHE_FILE
+        ):
+
+            with open(
+                CACHE_FILE,
+                "r"
+            ) as f:
+
+                return json.load(f)
+
+    except:
+
+        pass
+
+    return {}
+
+
+def save_cache(cache):
+
+    try:
+
+        with open(
+            CACHE_FILE,
+            "w"
+        ) as f:
+
+            json.dump(
+                cache,
+                f,
+                indent=2
+            )
+
+    except:
+
+        pass
+
+
+CACHE=load_cache()
+
+
+def build_cache_key(
+
+    custom_prompt,
+
+    rubric,
+
+    submission
+
+):
+
+    combined=(
+
+        custom_prompt+
+
+        rubric+
+
+        submission
+
+    )
+
+    return hashlib.sha256(
+
+        combined.encode(
+            errors="ignore"
+        )
+
+    ).hexdigest()
+
+
+# ==========================
+# READERS
 # ==========================
 
 def read_pdf(file):
 
     try:
 
-        reader = PdfReader(file)
+        reader=PdfReader(file)
 
         pages=[]
 
-        for page in reader.pages:
+        for p in reader.pages:
 
-            t=page.extract_text()
+            txt=p.extract_text()
 
-            if t:
+            if txt:
 
-                pages.append(t)
+                pages.append(txt)
 
         return "\n".join(pages)
 
@@ -82,12 +164,17 @@ def read_html(text):
     try:
 
         soup=BeautifulSoup(
+
             text,
+
             "html.parser"
+
         )
 
         for tag in soup(
+
             ["script","style"]
+
         ):
 
             tag.decompose()
@@ -106,23 +193,26 @@ def read_notebook(text):
     try:
 
         nb=nbformat.reads(
+
             text,
+
             as_version=4
+
         )
 
-        out=[]
+        output=[]
 
         for cell in nb.cells:
 
             if cell.cell_type=="markdown":
 
-                out.append(
+                output.append(
                     cell.source
                 )
 
             elif cell.cell_type=="code":
 
-                out.append(
+                output.append(
 
                     "CODE:\n"+
 
@@ -130,7 +220,7 @@ def read_notebook(text):
 
                 )
 
-        return "\n".join(out)
+        return "\n".join(output)
 
     except:
 
@@ -170,11 +260,11 @@ Sample:
 
 def rubric_to_text(df):
 
-    text=[]
+    rows=[]
 
     for _,r in df.iterrows():
 
-        text.append(
+        rows.append(
 
 f"""
 Criterion:
@@ -189,18 +279,18 @@ Description:
 
         )
 
-    return "\n".join(text)
+    return "\n".join(rows)
 
 
 # ==========================
-# ZIP PARSER
+# ZIP
 # ==========================
 
 def parse_submission(zip_bytes):
 
     result={
 
-        "documentation":[],
+        "docs":[],
 
         "code":[],
 
@@ -233,7 +323,7 @@ def parse_submission(zip_bytes):
             if suffix==".pdf":
 
                 result[
-                    "documentation"
+                    "docs"
                 ].append(
 
                     read_pdf(
@@ -245,7 +335,7 @@ def parse_submission(zip_bytes):
             elif suffix==".docx":
 
                 result[
-                    "documentation"
+                    "docs"
                 ].append(
 
                     read_docx(
@@ -262,7 +352,7 @@ def parse_submission(zip_bytes):
             ]:
 
                 result[
-                    "documentation"
+                    "docs"
                 ].append(
 
                     read_html(
@@ -275,7 +365,9 @@ def parse_submission(zip_bytes):
 
                 result[
                     "code"
-                ].append(decoded)
+                ].append(
+                    decoded
+                )
 
             elif suffix==".ipynb":
 
@@ -305,13 +397,17 @@ def parse_submission(zip_bytes):
 
                 result[
                     "database"
-                ].append(decoded)
+                ].append(
+                    decoded
+                )
 
             elif suffix==".md":
 
                 result[
-                    "documentation"
-                ].append(decoded)
+                    "docs"
+                ].append(
+                    decoded
+                )
 
         except:
 
@@ -330,7 +426,7 @@ def build_context(data):
 
 DOCUMENTATION
 
-{' '.join(data['documentation'])[:12000]}
+{' '.join(data['docs'])[:12000]}
 
 NOTEBOOKS
 
@@ -361,60 +457,49 @@ def evaluate_submission(prompt):
 
 STRICT evaluator.
 
-For identical submissions produce identical scores.
-
-Never randomly vary rubric scores.
-
-Highest TOTAL score=75.
-
-Score ONLY evidence.
-
-No evidence=no score.
+Maximum TOTAL=75.
 
 Extract evidence FIRST.
 
-Then score.
+Then assign rubric score.
+
+Same evidence MUST produce same score.
+
+No evidence=no score.
+
+Never estimate.
+
+Different quality MUST produce different scores.
+
+Deduct:
+
+- hardcoded logic
+- duplicate code
+- TODO comments
+- boilerplate
+- missing validation
+- weak architecture
+- weak modularity
+- missing testing
+- weak documentation
+- missing security
+- missing scalability
+
+Code quality > project size.
 
 Return ONLY JSON:
 
 {
+
 "evidence":{},
+
 "scores":{},
+
 "strengths":[],
+
 "improvements":[]
+
 }
-
-Weak implementation:
-
-0-49
-
-Average:
-
-50-59
-
-Good:
-
-60-65
-
-Excellent:
-
-65-69
-
-Exceptional:
-
-70-75 ONLY
-
-Deduct:
-
-- boilerplate
-- TODO
-- hardcoded
-- weak architecture
-- duplicate code
-- missing testing
-- missing validation
-- missing docs
-- weak modularity
 
 User prompt overrides defaults.
 
@@ -426,8 +511,12 @@ User prompt overrides defaults.
 
         temperature=0,
 
+        top_p=0,
+
         response_format={
+
             "type":"json_object"
+
         },
 
         messages=[
@@ -436,7 +525,9 @@ User prompt overrides defaults.
 
         "role":"system",
 
-        "content":SYSTEM
+        "content":
+
+        SYSTEM
 
         },
 
@@ -444,7 +535,9 @@ User prompt overrides defaults.
 
         "role":"user",
 
-        "content":prompt
+        "content":
+
+        prompt
 
         }
 
@@ -456,10 +549,6 @@ User prompt overrides defaults.
         0
     ].message.content
 
-
-# ==========================
-# JSON
-# ==========================
 
 def parse_json(raw):
 
@@ -493,13 +582,19 @@ rubric=st.file_uploader(
 )
 
 submissions=st.file_uploader(
+
 "Participant ZIP",
+
 type=["zip"],
+
 accept_multiple_files=True
+
 )
 
 custom_prompt=st.text_area(
-"Strict Evaluation Rules"
+
+"Strict Instructions"
+
 )
 
 
@@ -517,11 +612,19 @@ if st.button("Evaluate"):
         rubric_df
     )
 
-    problem_text=read_pdf(
-        problem
-    ) if problem.name.endswith(
+    if problem.name.endswith(
         ".pdf"
-    ) else read_docx(problem)
+    ):
+
+        problem_text=read_pdf(
+            problem
+        )
+
+    else:
+
+        problem_text=read_docx(
+            problem
+        )
 
     def process(zip_file):
 
@@ -551,13 +654,39 @@ SUBMISSION
 
 """
 
-        result=parse_json(
+        cache_key=build_cache_key(
 
-            evaluate_submission(
-                prompt
-            )
+            custom_prompt,
+
+            rubric_text,
+
+            context
 
         )
+
+        if cache_key in CACHE:
+
+            result=CACHE[
+                cache_key
+            ]
+
+        else:
+
+            result=parse_json(
+
+                evaluate_submission(
+                    prompt
+                )
+
+            )
+
+            CACHE[
+                cache_key
+            ]=result
+
+            save_cache(
+                CACHE
+            )
 
         row={
 
@@ -615,7 +744,7 @@ SUBMISSION
 
             raw_total+=score
 
-        factor=1.0
+        factor=1
 
         if raw_total>75:
 
@@ -635,17 +764,6 @@ SUBMISSION
 
             )
 
-            adjusted=max(
-
-                0,
-
-                min(
-                    adjusted,
-                    max_score
-                )
-
-            )
-
             row[
                 f"{criterion} ({max_score})"
             ]=adjusted
@@ -654,11 +772,43 @@ SUBMISSION
 
         if total>75:
 
+            overflow=total-75
+
+            cols=[
+
+                c
+
+                for c in row
+
+                if "(" in c
+
+            ]
+
+            i=0
+
+            while overflow>0:
+
+                col=cols[
+                    i%len(cols)
+                ]
+
+                if row[col]>0:
+
+                    row[col]-=1
+
+                    overflow-=1
+
+                i+=1
+
             total=75
 
-        row["Total"]=int(total)
+        row[
+            "Total"
+        ]=int(total)
 
-        row["Strengths"]="; ".join(
+        row[
+            "Strengths"
+        ]="; ".join(
 
             result.get(
                 "strengths",
@@ -667,7 +817,9 @@ SUBMISSION
 
         )
 
-        row["Improvements"]="; ".join(
+        row[
+            "Improvements"
+        ]="; ".join(
 
             result.get(
                 "improvements",
@@ -711,8 +863,11 @@ SUBMISSION
     ) as writer:
 
         df.to_excel(
+
             writer,
+
             index=False
+
         )
 
     st.download_button(
