@@ -39,19 +39,19 @@ def read_pdf(file):
 
     try:
 
-        reader=PdfReader(file)
+        reader = PdfReader(file)
 
-        pages=[]
+        text=[]
 
-        for p in reader.pages:
+        for page in reader.pages:
 
-            txt=p.extract_text()
+            t=page.extract_text()
 
-            if txt:
+            if t:
 
-                pages.append(txt)
+                text.append(t)
 
-        return "\n".join(pages)
+        return "\n".join(text)
 
     except:
 
@@ -82,12 +82,17 @@ def read_html(text):
     try:
 
         soup=BeautifulSoup(
+
             text,
+
             "html.parser"
+
         )
 
         for tag in soup(
+
             ["script","style"]
+
         ):
 
             tag.decompose()
@@ -146,7 +151,9 @@ def summarize_csv(text):
         )
 
         return f"""
-Rows:{df.shape[0]}
+
+Rows:
+{df.shape[0]}
 
 Columns:
 {list(df.columns)}
@@ -154,6 +161,7 @@ Columns:
 Sample:
 
 {df.head(3).to_string()}
+
 """
 
     except:
@@ -190,7 +198,7 @@ Description:
 
 
 # ==========================
-# PARSE ZIP
+# ZIP PARSER
 # ==========================
 
 def parse_submission(zip_bytes):
@@ -356,58 +364,46 @@ DATASETS
 
 def evaluate_submission(prompt):
 
-    SYSTEM_RULES="""
+    SYSTEM="""
 
 You are evaluating STRICTLY.
 
 Highest TOTAL score=75.
 
-Never reward size.
-
-Never reward folder count.
-
-Reward evidence only.
+Never give score without evidence.
 
 Deduct:
 
-- boilerplate code
-- TODOs
-- placeholder code
-- hardcoding
-- weak modularity
+- hardcoded logic
 - duplicate code
+- TODO/placeholder
 - missing validation
-- weak architecture
-- weak docs
-- weak API handling
 - missing testing
-- missing scalability
 - missing security
+- weak architecture
+- weak modularity
+- weak docs
+- incomplete implementation
 
-Different quality must receive different scores.
+Code quality > file count
 
-0-30:
-Broken
+Project size != quality
 
-31-40:
-Basic
+0-30 broken
 
-41-49:
-Weak
+31-40 basic
 
-50-59:
-Working gaps
+41-49 weak
 
-60-65:
-Good
+50-59 gaps
 
-65-69:
-Excellent
+60-65 good
 
-70-75:
-Exceptional ONLY
+65-69 excellent
 
-Return ONLY JSON:
+70-75 exceptional ONLY
+
+Return JSON:
 
 {
 "scores":{},
@@ -415,7 +411,7 @@ Return ONLY JSON:
 "improvements":[]
 }
 
-USER PROMPT OVERRIDES DEFAULTS
+User prompt overrides defaults.
 
 """
 
@@ -435,9 +431,7 @@ USER PROMPT OVERRIDES DEFAULTS
 
         "role":"system",
 
-        "content":
-
-        SYSTEM_RULES
+        "content":SYSTEM
 
         },
 
@@ -445,9 +439,7 @@ USER PROMPT OVERRIDES DEFAULTS
 
         "role":"user",
 
-        "content":
-
-        prompt
+        "content":prompt
 
         }
 
@@ -506,9 +498,7 @@ accept_multiple_files=True
 )
 
 custom_prompt=st.text_area(
-
 "Strict Instructions"
-
 )
 
 
@@ -526,11 +516,19 @@ if st.button("Evaluate"):
         rubric_df
     )
 
-    problem_text=read_pdf(
-        problem
-    ) if problem.name.endswith(
+    if problem.name.endswith(
         ".pdf"
-    ) else read_docx(problem)
+    ):
+
+        problem_text=read_pdf(
+            problem
+        )
+
+    else:
+
+        problem_text=read_docx(
+            problem
+        )
 
     def process(zip_file):
 
@@ -558,16 +556,16 @@ SUBMISSION
 
 {context}
 
-Score ONLY evidence.
+Evaluate strictly.
 
 """
 
-        raw=evaluate_submission(
-            prompt
-        )
-
         result=parse_json(
-            raw
+
+            evaluate_submission(
+                prompt
+            )
+
         )
 
         row={
@@ -577,7 +575,7 @@ Score ONLY evidence.
 
         }
 
-        raw_scores=[]
+        raw=[]
 
         raw_total=0
 
@@ -587,7 +585,7 @@ Score ONLY evidence.
                 "Criterion"
             ]
 
-            max_score=float(
+            max_score=int(
                 r["Max Score"]
             )
 
@@ -614,7 +612,7 @@ Score ONLY evidence.
 
             )
 
-            raw_scores.append(
+            raw.append(
 
                 (
                     criterion,
@@ -634,31 +632,38 @@ Score ONLY evidence.
 
         total=0
 
-        for criterion,max_score,score in raw_scores:
+        for criterion,max_score,score in raw:
 
             adjusted=int(
 
-                round(
+                score*factor
 
-                    score*factor
+            )
 
+            adjusted=max(
+
+                0,
+
+                min(
+                    adjusted,
+                    max_score
                 )
 
             )
 
             row[
-                f"{criterion} ({int(max_score)})"
+                f"{criterion} ({max_score})"
             ]=adjusted
 
             total+=adjusted
 
-        row[
-            "Total"
-        ]=total
+        if total>75:
 
-        row[
-            "Strengths"
-        ]="; ".join(
+            total=75
+
+        row["Total"]=int(total)
+
+        row["Strengths"]="; ".join(
 
             result.get(
                 "strengths",
@@ -667,9 +672,7 @@ Score ONLY evidence.
 
         )
 
-        row[
-            "Improvements"
-        ]="; ".join(
+        row["Improvements"]="; ".join(
 
             result.get(
                 "improvements",
@@ -693,12 +696,12 @@ Score ONLY evidence.
 
         )
 
-    output=pd.DataFrame(
+    df=pd.DataFrame(
         results
     )
 
     st.dataframe(
-        output,
+        df,
         use_container_width=True
     )
 
@@ -712,7 +715,7 @@ Score ONLY evidence.
 
     ) as writer:
 
-        output.to_excel(
+        df.to_excel(
 
             writer,
 
