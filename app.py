@@ -41,7 +41,7 @@ def read_pdf(file):
 
         reader = PdfReader(file)
 
-        text=[]
+        pages=[]
 
         for page in reader.pages:
 
@@ -49,9 +49,9 @@ def read_pdf(file):
 
             if t:
 
-                text.append(t)
+                pages.append(t)
 
-        return "\n".join(text)
+        return "\n".join(pages)
 
     except:
 
@@ -82,17 +82,12 @@ def read_html(text):
     try:
 
         soup=BeautifulSoup(
-
             text,
-
             "html.parser"
-
         )
 
         for tag in soup(
-
             ["script","style"]
-
         ):
 
             tag.decompose()
@@ -115,19 +110,19 @@ def read_notebook(text):
             as_version=4
         )
 
-        output=[]
+        out=[]
 
         for cell in nb.cells:
 
             if cell.cell_type=="markdown":
 
-                output.append(
+                out.append(
                     cell.source
                 )
 
             elif cell.cell_type=="code":
 
-                output.append(
+                out.append(
 
                     "CODE:\n"+
 
@@ -135,7 +130,7 @@ def read_notebook(text):
 
                 )
 
-        return "\n".join(output)
+        return "\n".join(out)
 
     except:
 
@@ -175,11 +170,11 @@ Sample:
 
 def rubric_to_text(df):
 
-    out=[]
+    text=[]
 
     for _,r in df.iterrows():
 
-        out.append(
+        text.append(
 
 f"""
 Criterion:
@@ -194,7 +189,7 @@ Description:
 
         )
 
-    return "\n".join(out)
+    return "\n".join(text)
 
 
 # ==========================
@@ -213,9 +208,7 @@ def parse_submission(zip_bytes):
 
         "database":[],
 
-        "datasets":[],
-
-        "images":[]
+        "datasets":[]
 
     }
 
@@ -366,50 +359,62 @@ def evaluate_submission(prompt):
 
     SYSTEM="""
 
-You are evaluating STRICTLY.
+STRICT evaluator.
+
+For identical submissions produce identical scores.
+
+Never randomly vary rubric scores.
 
 Highest TOTAL score=75.
 
-Never give score without evidence.
+Score ONLY evidence.
 
-Deduct:
+No evidence=no score.
 
-- hardcoded logic
-- duplicate code
-- TODO/placeholder
-- missing validation
-- missing testing
-- missing security
-- weak architecture
-- weak modularity
-- weak docs
-- incomplete implementation
+Extract evidence FIRST.
 
-Code quality > file count
+Then score.
 
-Project size != quality
-
-0-30 broken
-
-31-40 basic
-
-41-49 weak
-
-50-59 gaps
-
-60-65 good
-
-65-69 excellent
-
-70-75 exceptional ONLY
-
-Return JSON:
+Return ONLY JSON:
 
 {
+"evidence":{},
 "scores":{},
 "strengths":[],
 "improvements":[]
 }
+
+Weak implementation:
+
+0-49
+
+Average:
+
+50-59
+
+Good:
+
+60-65
+
+Excellent:
+
+65-69
+
+Exceptional:
+
+70-75 ONLY
+
+Deduct:
+
+- boilerplate
+- TODO
+- hardcoded
+- weak architecture
+- duplicate code
+- missing testing
+- missing validation
+- missing docs
+- weak modularity
 
 User prompt overrides defaults.
 
@@ -488,17 +493,13 @@ rubric=st.file_uploader(
 )
 
 submissions=st.file_uploader(
-
 "Participant ZIP",
-
 type=["zip"],
-
 accept_multiple_files=True
-
 )
 
 custom_prompt=st.text_area(
-"Strict Instructions"
+"Strict Evaluation Rules"
 )
 
 
@@ -516,19 +517,11 @@ if st.button("Evaluate"):
         rubric_df
     )
 
-    if problem.name.endswith(
+    problem_text=read_pdf(
+        problem
+    ) if problem.name.endswith(
         ".pdf"
-    ):
-
-        problem_text=read_pdf(
-            problem
-        )
-
-    else:
-
-        problem_text=read_docx(
-            problem
-        )
+    ) else read_docx(problem)
 
     def process(zip_file):
 
@@ -555,8 +548,6 @@ RUBRIC
 SUBMISSION
 
 {context}
-
-Evaluate strictly.
 
 """
 
@@ -624,11 +615,15 @@ Evaluate strictly.
 
             raw_total+=score
 
-        factor=1
+        factor=1.0
 
         if raw_total>75:
 
             factor=75/raw_total
+
+        factor=float(
+            f"{factor:.4f}"
+        )
 
         total=0
 
@@ -716,11 +711,8 @@ Evaluate strictly.
     ) as writer:
 
         df.to_excel(
-
             writer,
-
             index=False
-
         )
 
     st.download_button(
